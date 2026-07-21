@@ -256,6 +256,16 @@ MODEL_CONFIG = {
     "minimax_m3_vl": {
         "min_transformers_version": MIN_SUPPORTED_TRANSFORMERS_VERSION,
     },
+    "mistral4": {
+        # Mistral4Experts is @use_experts_implementation-decorated, so it is
+        # unfused via the decorator (linear_loop) path -- no REPLACE_MODULE /
+        # EXPERTS_DEFUSE spec needed. The entry exists so check_model_compatibility
+        # does not skip conversion. Its fused experts use the standard [out, in]
+        # layout (gate_up_proj = [E, 2*inter, hidden]), identical to Gemma4, which
+        # the is_transposed heuristic mis-detects -- patch_mistral4_runtime forces
+        # is_transposed=False.
+        "min_transformers_version": MIN_SUPPORTED_TRANSFORMERS_VERSION,
+    },
     "nemotron_h": {
         "min_transformers_version": MIN_SUPPORTED_TRANSFORMERS_VERSION,
     },
