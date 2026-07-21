@@ -284,6 +284,16 @@ def patch_gemma4_runtime(model, max_layers: int | None = None, filter_rules=None
     )
 
 
+@register_model_patch("mistral4")
+def patch_mistral4_runtime(model, max_layers: int | None = None, filter_rules=None) -> list[str]:
+    return _patch_modules_by_class(
+        model,
+        {"transformers.models.mistral4.modeling_mistral4.Mistral4Experts": _mark_experts_not_transposed},
+        max_layers=max_layers,
+        filter_rules=filter_rules,
+    )
+
+
 @register_model_patch("dbrx")
 def patch_dbrx_runtime(model, max_layers: int | None = None, filter_rules=None) -> list[str]:
     return _patch_modules_by_class(
