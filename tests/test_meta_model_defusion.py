@@ -162,6 +162,11 @@ def _build_model_config(case: dict):
             "rope_type": "default",
             "mrope_section": [2, 2, 4],
         }
+    elif model_type == "gemma4":
+        config.text_config.enable_moe_block = True
+        config.text_config.num_experts = 4
+        config.text_config.top_k_experts = 2
+        config.text_config.moe_intermediate_size = 32
     elif model_type == "glm4_moe":
         config.first_k_dense_replace = -1
     elif model_type == "glm_moe_dsa":
@@ -416,6 +421,17 @@ META_MODEL_CASES = [
         "validator": "experts",
     },
     {
+        "model_type": "gemma4",
+        "mode": "convert",
+        "model_module": "transformers.models.gemma4.modeling_gemma4",
+        "model_class": "Gemma4ForConditionalGeneration",
+        "config_module": "transformers.models.gemma4.configuration_gemma4",
+        "config_class": "Gemma4Config",
+        "target_class_paths": ("transformers.models.gemma4.modeling_gemma4.Gemma4TextExperts",),
+        "validator": "experts",
+        "min_targets": 1,
+    },
+    {
         "model_type": "glm",
         "mode": "convert",
         "model_module": "transformers.models.glm.modeling_glm",
@@ -647,6 +663,20 @@ META_MODEL_CASES = [
         "config_class": "MiniMaxM2Config",
         "target_class_paths": ("transformers.models.minimax_m2.modeling_minimax_m2.MiniMaxM2Experts",),
         "validator": "experts",
+    },
+    {
+        # Requires a transformers version that ships Mistral4Experts (the
+        # decorator-path fused experts); older versions only have Mistral4MoE
+        # and fail this case on the target-class scan.
+        "model_type": "mistral4",
+        "mode": "convert",
+        "model_module": "transformers.models.mistral4.modeling_mistral4",
+        "model_class": "Mistral4ForCausalLM",
+        "config_module": "transformers.models.mistral4.configuration_mistral4",
+        "config_class": "Mistral4Config",
+        "target_class_paths": ("transformers.models.mistral4.modeling_mistral4.Mistral4Experts",),
+        "validator": "experts",
+        "min_targets": 1,
     },
     {
         "model_type": "mixtral",
