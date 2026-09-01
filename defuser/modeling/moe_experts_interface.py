@@ -159,20 +159,29 @@ def linear_loop_experts_forward(
     sample_weights = top_k_weights.reshape(-1).to(hidden_states.dtype)  # (S,)
     expert_ids = top_k_index.reshape(-1)  # (S,)
 
-    # Get current hidden states for selected samples
-    selected_hidden_states = hidden_states[token_idx]  # (S, hidden_dim)
+    # Sorted gather: one stable sort + one host sync (bincount().tolist())
+    # replaces the per-expert boolean mask, whose `mask.any()` paid two host
+    # syncs per expert. The STABLE argsort preserves ascending pair order
+    # within each expert, so every expert consumes the identical rows in the
+    # identical order as the masked path: outputs are bit-exact, and row order
+    # seen by capture hooks (e.g. Hessian accumulation) is unchanged.
+    sort_idx = torch.argsort(expert_ids, stable=True)  # (S,)
+    counts = torch.bincount(expert_ids, minlength=num_experts).tolist()
+    sorted_hidden_states = hidden_states[token_idx[sort_idx]]  # (S, hidden_dim)
 
     # Allocate output tensor
     out_per_sample = torch.zeros(token_idx.size(0), hidden_dim, device=device, dtype=hidden_states.dtype)
 
-    # Process each expert
+    # Process each expert on its contiguous slice of the sorted gather.
+    # Expert ids outside [0, num_experts) sort past the slices consumed here
+    # and keep their zero rows, matching the masked path's behavior.
+    offset = 0
     for expert_idx in range(num_experts):
-        # Find samples routed to this expert
-        mask = expert_ids == expert_idx
-        if not mask.any():
+        num_samples = counts[expert_idx]
+        if num_samples == 0:
             continue
 
-        expert_input = selected_hidden_states[mask]  # (num_samples_for_expert, hidden_dim)
+        expert_input = sorted_hidden_states.narrow(0, offset, num_samples)  # (num_samples, hidden_dim)
 
         # Get this expert's container with its projection layers
         expert = getattr(self, str(expert_idx))
@@ -187,8 +196,12 @@ def linear_loop_experts_forward(
         # Down projection
         expert_out = expert.down_proj(gated_out)  # (num_samples, hidden_dim)
 
-        # Store results
-        out_per_sample[mask] = expert_out.to(out_per_sample.dtype)
+        # Scatter back to original pair positions. sort_idx rows are unique,
+        # so index_copy_ is deterministic on CUDA (unlike index_add_).
+        out_per_sample.index_copy_(
+            0, sort_idx.narrow(0, offset, num_samples), expert_out.to(out_per_sample.dtype)
+        )
+        offset += num_samples
 
     # Apply routing weights
     out_per_sample = out_per_sample * sample_weights.unsqueeze(-1)  # (S, hidden_dim)
