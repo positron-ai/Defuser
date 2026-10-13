@@ -260,6 +260,44 @@ def patch_zamba2_runtime(model, max_layers: int | None = None, filter_rules=None
     )
 
 
+def _mark_experts_not_transposed(module) -> bool:
+    """Force standard [out, in] expert layout for the unfuse split.
+
+    Gemma4TextExperts stores fused weights as gate_up_proj = [E, 2*inter, hidden]
+    and down_proj = [E, hidden, inter] -- the standard nn.Linear [out, in] layout.
+    The is_transposed auto-heuristic (`dim1 < dim2` on the first projection)
+    mis-classifies gate_up_proj as transposed, which would split the hidden dim
+    instead of the gate/up dim and corrupt every expert. Marking the module
+    explicitly makes _unfuse_experts_weights_inplace split along the gate/up dim.
+    """
+    module.is_transposed = False
+    return True
+
+
+@register_model_patch("gemma4")
+def patch_gemma4_runtime(model, max_layers: int | None = None, filter_rules=None) -> list[str]:
+    return _patch_modules_by_class(
+        model,
+        {"transformers.models.gemma4.modeling_gemma4.Gemma4TextExperts": _mark_experts_not_transposed},
+        max_layers=max_layers,
+        filter_rules=filter_rules,
+    )
+
+
+@register_model_patch("mistral4")
+def patch_mistral4_runtime(model, max_layers: int | None = None, filter_rules=None) -> list[str]:
+    return _patch_modules_by_class(
+        model,
+        {
+            # transformers 5.11 names the same fused experts Mistral4NaiveMoe.
+            "transformers.models.mistral4.modeling_mistral4.Mistral4Experts": _mark_experts_not_transposed,
+            "transformers.models.mistral4.modeling_mistral4.Mistral4NaiveMoe": _mark_experts_not_transposed,
+        },
+        max_layers=max_layers,
+        filter_rules=filter_rules,
+    )
+
+
 @register_model_patch("dbrx")
 def patch_dbrx_runtime(model, max_layers: int | None = None, filter_rules=None) -> list[str]:
     return _patch_modules_by_class(
