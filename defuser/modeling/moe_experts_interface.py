@@ -50,6 +50,7 @@ except ImportError:
 # Expert implementation name - change this if transformers want to use a different name
 LINEAR_LOOP_IMPL = "linear_loop"
 BATCHED_INPUT_IMPL = "batched_input"
+MUSE_SPARK_IMPL = "muse_spark"
 
 # Known expert projection patterns for reference
 # These are used as hints when auto-detection needs to infer projection properties
@@ -204,6 +205,41 @@ def linear_loop_experts_forward(
     return final_hidden_states
 
 
+def muse_spark_experts_forward(
+    self: nn.Module,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Forward for defused Muse Spark experts, matching transformers' eager ``MuseSparkExperts``.
+
+    Unlike ``linear_loop``, it applies ``post_expert_norm``, keeps routing weights in
+    their own dtype and casts each weighted contribution before ``index_add_``.
+    """
+    final_hidden_states = torch.zeros_like(hidden_states)
+    with torch.no_grad():
+        expert_mask = torch.nn.functional.one_hot(top_k_index, num_classes=self.num_experts + 1)
+        expert_mask = expert_mask.permute(2, 1, 0)
+        expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+
+    for expert_idx_tensor in expert_hit:
+        expert_idx = int(expert_idx_tensor.item())
+        if expert_idx == self.num_experts:
+            continue
+        top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
+        expert = getattr(self, str(expert_idx))
+        current_state = hidden_states[token_idx]
+        gate = expert.gate_proj(current_state)
+        up = expert.up_proj(current_state)
+        current_hidden_states = self.act_fn(gate) * up
+        current_hidden_states = expert.down_proj(current_hidden_states)
+        current_hidden_states = self.post_expert_norm(current_hidden_states)
+        current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+        final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+    return final_hidden_states
+
+
 def batched_input_experts_forward(self: nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
     """Run defused experts for models that feed experts as expert-major input batches.
 
@@ -288,6 +324,10 @@ def _install_instance_forward(module: nn.Module, implementation: str) -> None:
 
     if implementation == BATCHED_INPUT_IMPL:
         module.forward = MethodType(batched_input_experts_forward, module)
+        return
+
+    if implementation == MUSE_SPARK_IMPL:
+        module.forward = MethodType(muse_spark_experts_forward, module)
         return
 
     raise ValueError(f"Unsupported experts forward implementation: {implementation}")

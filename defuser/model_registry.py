@@ -114,6 +114,24 @@ MODEL_CONFIG = {
             ),
         ],
     },
+    "muse_spark": {
+        "min_transformers_version": "5.20.1",
+        PATCH.EXPERTS_DEFUSE: [
+            {
+                "module_class": "transformers.models.muse_spark.modeling_muse_spark.MuseSparkExperts",
+                "forward_impl": "muse_spark",
+            }
+        ],
+    },
+    "muse_spark_text": {
+        "min_transformers_version": "5.20.1",
+        PATCH.EXPERTS_DEFUSE: [
+            {
+                "module_class": "transformers.models.muse_spark.modeling_muse_spark.MuseSparkExperts",
+                "forward_impl": "muse_spark",
+            }
+        ],
+    },
     "qwen2_moe": {
         "min_transformers_version": MIN_SUPPORTED_TRANSFORMERS_VERSION,
         PATCH.REPLACE_MODULE: [

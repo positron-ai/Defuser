@@ -65,7 +65,7 @@ from defuser.modeling.unfused_moe.qwen3_omni_moe import (
     LinearQwen3OmniMoeTalkerTextSparseMoeBlock,
     LinearQwen3OmniMoeThinkerTextSparseMoeBlock,
 )
-from defuser.utils.common import MIN_SUPPORTED_TRANSFORMERS_VERSION
+from defuser.utils.common import MIN_SUPPORTED_TRANSFORMERS_VERSION, is_version_at_least
 
 
 
@@ -693,7 +693,10 @@ def test_replace_fused_blocks_applies_all_registered_replacements():
 
 
 def test_model_registry_requires_transformers_5_3_or_newer():
-    assert {cfg["min_transformers_version"] for cfg in MODEL_CONFIG.values()} == {MIN_SUPPORTED_TRANSFORMERS_VERSION}
+    assert all(
+        is_version_at_least(cfg["min_transformers_version"], MIN_SUPPORTED_TRANSFORMERS_VERSION)
+        for cfg in MODEL_CONFIG.values()
+    )
 
 
 def test_replace_fused_blocks_warns_on_unsupported_transformers(monkeypatch):
