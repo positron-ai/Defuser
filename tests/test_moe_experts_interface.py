@@ -250,6 +250,9 @@ with torch.no_grad():
     for parameter in model.parameters():
         parameter.normal_(std=0.1)
 before = {name: value.clone() for name, value in model.state_dict().items()}
+inputs = torch.randn(8, 8)
+with torch.no_grad():
+    expected = model.layers[1](inputs)
 original_import = builtins.__import__
 def blocked(
     name: str, globals: dict | None = None, locals: dict | None = None,
@@ -281,6 +284,9 @@ if selection == 'selected':
 assert model.state_dict().keys() == before.keys()
 for name, value in model.state_dict().items():
     torch.testing.assert_close(value, before[name], rtol=0, atol=0)
+with torch.no_grad():
+    actual = model.layers[1](inputs)
+torch.testing.assert_close(actual, expected)
 """
     subprocess.run(
         [sys.executable, "-B", "-c", script, selection],
