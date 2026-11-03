@@ -38,6 +38,10 @@ retrying; Defuser does not silently reinterpret that saved setting. The private
 `_experts_implementation='eager'` initialization setting remains supported.
 Converted instances receive their own forward method so filtered conversion does
 not switch the backend of untouched modules sharing the same configuration.
+The generic expert forward bindings support pickle and whole-model serialization.
+Consistent split
+gate/up/down projections use standard `[expert, out, in]` weights when no
+`is_transposed` flag is present; transposed weights declare that flag as `True`.
 
 The GLM4 MoE and Lite replacements accept legacy logits-only routers and newer
 `(logits, weights, indices)` routers. Newer routing weights and choices are used

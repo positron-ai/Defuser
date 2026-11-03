@@ -98,10 +98,12 @@ Use `convert_model()` for already loaded models whose expert tensors still need 
 from defuser import convert_model
 
 converted = convert_model(model)
-print(converted)  # True when runtime defusion happened
+print(converted)  # Legacy compatibility result; not a conversion count
 ```
 
 `convert_model(model)` also preserves meta-device construction for supported meta-initialized models, so structural validation can run without materializing weights.
+
+Use [`convert_model_with_report(model, required=True)`](COMPATIBILITY.md) to require conversion or verified defused modules and distinguish unsupported or zero-target calls.
 
 Use `filter` when only specific blocks should be defused 🎯:
 

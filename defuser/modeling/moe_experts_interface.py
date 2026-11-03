@@ -27,7 +27,7 @@ Usage:
 
 import inspect
 from collections.abc import Sequence
-from types import MethodType
+from functools import partial
 
 import torch
 from logbar import LogBar
@@ -47,6 +47,7 @@ try:
 
     HAS_EXPERTS_INTERFACE = True
 except ImportError:
+    transformers_moe = None
     HAS_EXPERTS_INTERFACE = False
     ALL_EXPERTS_FUNCTIONS = None
 
@@ -322,15 +323,15 @@ def _matching_experts_defuse_spec(module: nn.Module, specs: list[dict]) -> dict 
 def _install_instance_forward(module: nn.Module, implementation: str) -> None:
     """Attach a generic forward implementation directly to one experts module."""
     if implementation == LINEAR_LOOP_IMPL:
-        module.forward = MethodType(linear_loop_experts_forward, module)
+        module.forward = partial(linear_loop_experts_forward, module)
         return
 
     if implementation == BATCHED_INPUT_IMPL:
-        module.forward = MethodType(batched_input_experts_forward, module)
+        module.forward = partial(batched_input_experts_forward, module)
         return
 
     if implementation == MUSE_SPARK_IMPL:
-        module.forward = MethodType(muse_spark_experts_forward, module)
+        module.forward = partial(muse_spark_experts_forward, module)
         return
 
     raise ValueError(f"Unsupported experts forward implementation: {implementation}")
@@ -470,11 +471,7 @@ def validate_expert_layout(
     candidates = [layout for layout in (False, True) if fits(layout)]
     if len(candidates) == 1:
         return candidates[0]
-    if (
-        len(candidates) == 2
-        and "gate_up_proj" not in tensors
-        and "gate_proj" not in tensors
-    ):
+    if len(candidates) == 2 and "gate_up_proj" not in tensors:
         return False
     raise ValueError(
         "Expert geometry is inconsistent or ambiguous; declare is_transposed"
@@ -886,6 +883,8 @@ def plan_moe_quantization(
             )
             if layout is None:
                 continue
+            if not HAS_EXPERTS_INTERFACE:
+                raise RuntimeError("Transformers experts interface is unavailable")
             gate = getattr(module, "_apply_gate", None)
             default_gate = (
                 getattr(gate, "__func__", gate)

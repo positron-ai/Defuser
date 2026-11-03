@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 ModelCloud.ai
 # SPDX-License-Identifier: Apache-2.0
 
+import pickle
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -11,7 +12,6 @@ from torch import nn
 
 from defuser import convert_model
 from defuser.model_registry import MODEL_CONFIG
-from defuser.modeling.moe_experts_interface import muse_spark_experts_forward
 from defuser.utils.common import is_version_at_least
 
 pytestmark = pytest.mark.skipif(
@@ -44,7 +44,6 @@ def test_muse_spark_experts_match_eager(model_type):
     model.mlp = deepcopy(native)
     assert convert_model(model)
     experts = model.mlp.experts
-    assert experts.forward.__func__ is muse_spark_experts_forward
     assert not hasattr(experts, "gate_up_proj")
 
     states = torch.randn(2, 3, 16, dtype=torch.bfloat16)
@@ -55,3 +54,6 @@ def test_muse_spark_experts_match_eager(model_type):
     weights = torch.rand(indices.shape)
     hidden = torch.randn(2, 8, dtype=torch.bfloat16)
     torch.testing.assert_close(experts(hidden, indices, weights), native.experts(hidden, indices, weights))
+    restored = pickle.loads(pickle.dumps(model))
+    torch.testing.assert_close(restored.mlp(states), native(states))
+    torch.testing.assert_close(restored.mlp.experts(hidden, indices, weights), native.experts(hidden, indices, weights))
