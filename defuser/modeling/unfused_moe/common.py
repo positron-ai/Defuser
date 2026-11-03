@@ -3,8 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
+from collections.abc import Callable
+
 import torch
 from torch import nn
+
+
+def resolve_topk_routing(
+    output: torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    legacy_router: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Use routing computed by newer HF gates, or the legacy logits contract."""
+    if isinstance(output, torch.Tensor):
+        return legacy_router(output)
+    if isinstance(output, tuple) and len(output) == 3:
+        _, weights, indices = output
+        if (
+            isinstance(weights, torch.Tensor)
+            and isinstance(indices, torch.Tensor)
+            and weights.shape == indices.shape
+            and indices.dtype in (torch.int32, torch.int64)
+        ):
+            return indices, weights
+    raise TypeError(
+        "Unsupported router output: expected logits or (logits, weights, indices)"
+    )
 
 
 def run_routed_experts(

@@ -3,5 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 pypcre>=0.2.13
-transformers
+transformers[torch]>=5.3.0
 logbar>=0.4.14
+torch
+packaging
+tqdm

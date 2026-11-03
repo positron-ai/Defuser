@@ -149,7 +149,10 @@ def compile_module_name_filter(
             bucket = positive
             pattern = raw_rule
 
-        bucket.append(pcre.compile(pattern))
+        try:
+            bucket.append(pcre.compile(pattern))
+        except pcre.PcreError as error:
+            raise ValueError(f"Invalid module filter {pattern!r}: {error}") from error
 
     return ModuleNameFilter(
         positive=tuple(positive),

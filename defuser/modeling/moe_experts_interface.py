@@ -25,6 +25,8 @@ Usage:
     # Now the model uses linear_loop forward which supports quantized nn.Linear layers
 """
 
+import inspect
+from collections.abc import Sequence
 from types import MethodType
 
 import torch
@@ -32,7 +34,7 @@ from logbar import LogBar
 from torch import nn
 
 from defuser.model_registry import MODEL_CONFIG, PATCH
-from defuser.utils.common import compile_module_name_filter, matches_module_name_filter
+from defuser.utils.common import ModuleNameFilter, compile_module_name_filter, is_within_max_layers, matches_module_name_filter
 from defuser.utils.device import clear_memory, to_meta
 
 from defuser import DEBUG_ON
@@ -97,7 +99,7 @@ def _apply_expert_gate(
             raise AttributeError(f"{module.__class__.__name__} must define `act_fn` for non-gated experts.")
         return act_fn(up_out)
 
-    if hasattr(module, "_apply_gate"):
+    if callable(getattr(module, "_apply_gate", None)):
         return module._apply_gate(torch.cat([gate_out, up_out], dim=-1))
 
     act_fn = getattr(module, "act_fn", None)
@@ -387,6 +389,100 @@ def _get_registered_tensor(module: nn.Module, name: str) -> torch.Tensor | None:
     return None
 
 
+def validate_expert_layout(
+    module: nn.Module,
+    projection_names: list[str] | None = None,
+) -> bool | None:
+    """Resolve a consistent projection layout without modifying tensor storage."""
+    local = {**module._parameters, **module._buffers}
+    for name, tensor in local.items():
+        if (
+            name in KNOWN_PROJECTION_PATTERNS
+            and isinstance(tensor, torch.Tensor)
+            and tensor.ndim != 3
+        ):
+            raise ValueError(f"Expert projection {name} must have rank 3")
+        if (
+            isinstance(tensor, torch.Tensor)
+            and tensor.ndim == 3
+            and name not in KNOWN_PROJECTION_PATTERNS
+        ):
+            raise ValueError(f"Unknown expert projection: {name}")
+    detected = _detect_expert_projections(module)
+    if projection_names is not None:
+        if detected and set(projection_names) != set(detected):
+            raise ValueError(
+                "Declared expert projections do not match registered tensors"
+            )
+        detected = {
+            name: value for name, value in detected.items() if name in projection_names
+        }
+    if not detected:
+        return None
+    tensors = {name: _get_registered_tensor(module, name) for name in detected}
+    first = next(iter(tensors.values()))
+    experts = first.shape[0]
+    if experts < 1 or getattr(module, "num_experts", experts) != experts:
+        raise ValueError("Expert count does not match projection tensors")
+    for name, tensor in tensors.items():
+        if (
+            tensor.shape[0] != experts
+            or tensor.device != first.device
+            or tensor.dtype != first.dtype
+        ):
+            raise ValueError(f"Inconsistent expert projection: {name}")
+        if any(size < 1 for size in tensor.shape):
+            raise ValueError(f"Empty expert projection: {name}")
+    if "down_proj" not in tensors or not ({"gate_up_proj", "up_proj"} & tensors.keys()):
+        raise ValueError("Experts require an input projection and down_proj")
+    if "gate_up_proj" in tensors and ({"gate_proj", "up_proj"} & tensors.keys()):
+        raise ValueError("Experts contain both fused and split gate/up projections")
+
+    def fits(transposed: bool) -> bool:
+        dimensions = {}
+        for name, tensor in tensors.items():
+            left, right = tensor.shape[1:]
+            output, input_dim = (right, left) if transposed else (left, right)
+            multiplier = KNOWN_PROJECTION_PATTERNS[name]["output_multiplier"]
+            if output % multiplier:
+                return False
+            dimensions[name] = (input_dim, output // multiplier)
+            bias = _get_registered_tensor(module, f"{name}_bias")
+            if bias is not None:
+                if (
+                    tuple(bias.shape) != (experts, output)
+                    or bias.device != tensor.device
+                    or bias.dtype != tensor.dtype
+                ):
+                    return False
+        hidden, intermediate = dimensions.get("gate_up_proj", dimensions.get("up_proj"))
+        if dimensions["down_proj"] != (intermediate, hidden):
+            return False
+        return all(
+            dim == (hidden, intermediate)
+            for name, dim in dimensions.items()
+            if name != "down_proj"
+        )
+
+    explicit = getattr(module, "is_transposed", None)
+    if explicit is not None:
+        if not isinstance(explicit, bool) or not fits(explicit):
+            raise ValueError("Expert geometry disagrees with is_transposed")
+        return explicit
+    candidates = [layout for layout in (False, True) if fits(layout)]
+    if len(candidates) == 1:
+        return candidates[0]
+    if (
+        len(candidates) == 2
+        and "gate_up_proj" not in tensors
+        and "gate_proj" not in tensors
+    ):
+        return False
+    raise ValueError(
+        "Expert geometry is inconsistent or ambiguous; declare is_transposed"
+    )
+
+
 def _set_registered_tensor_like(module: nn.Module, name: str, tensor: torch.Tensor, source: torch.Tensor) -> None:
     """Register ``tensor`` using the same parameter-vs-buffer kind as ``source``."""
 
@@ -405,8 +501,16 @@ def _experts_supports_decorator(module: nn.Module) -> bool:
     forward_method = getattr(module.__class__, "forward", None)
     if forward_method is None:
         return False
-    # @use_experts_implementation sets __wrapped__ on the decorated method
-    return hasattr(forward_method, "__wrapped__")
+    if not hasattr(forward_method, "__wrapped__") or not inspect.isfunction(
+        forward_method
+    ):
+        return False
+    # Match the Transformers dispatch closure, not arbitrary @wraps decorators.
+    closure = inspect.getclosurevars(forward_method).nonlocals
+    return HAS_EXPERTS_INTERFACE and (
+        closure.get("experts_interface") is ALL_EXPERTS_FUNCTIONS
+        and closure.get("original_forward") is forward_method.__wrapped__
+    )
 
 
 def _infer_dimensions(param: torch.Tensor, config: dict, is_transposed: bool) -> tuple[int, int]:
@@ -646,12 +750,9 @@ def _unfuse_experts_weights_inplace(
         True if unfusing was successful, False if module doesn't match pattern
     """
     # Detect available projections
-    if projection_names:
-        detected_projections = {
-            name: config for name, config in KNOWN_PROJECTION_PATTERNS.items() if name in projection_names
-        }
-    else:
-        detected_projections = _detect_expert_projections(module)
+    detected_projections = _detect_expert_projections(module)
+    if projection_names is not None:
+        detected_projections = {name: config for name, config in detected_projections.items() if name in projection_names}
 
     if not detected_projections:
         return False
@@ -666,19 +767,7 @@ def _unfuse_experts_weights_inplace(
     first_param = _get_registered_tensor(module, first_proj_name)
     num_experts = first_param.shape[0]
 
-    # Detect if transposed
-    is_transposed = getattr(module, "is_transposed", None)
-    if is_transposed is None:
-        # Infer from shape: typically hidden_dim < intermediate_dim
-        if (
-            first_proj_name in {"up_proj", "down_proj"}
-            and "gate_up_proj" not in detected_projections
-            and "gate_proj" not in detected_projections
-        ):
-            is_transposed = False
-        else:
-            dim1, dim2 = first_param.shape[1], first_param.shape[2]
-            is_transposed = dim1 < dim2
+    is_transposed = validate_expert_layout(module, projection_names)
 
     dtype = first_param.dtype
     target_device = first_param.device if first_param.device.type != "meta" else "cpu"
@@ -769,16 +858,90 @@ def _unfuse_experts_weights_inplace(
     return True
 
 
+def plan_moe_quantization(
+    model: nn.Module,
+    implementation: str = LINEAR_LOOP_IMPL,
+    filter_rules: Sequence[str] | ModuleNameFilter | None = None,
+    max_layers: int | None = None,
+) -> list[tuple[str, nn.Module, dict | None]]:
+    """Validate all selected generic expert targets without changing tensors."""
+    experts_defuse_specs = _model_experts_defuse_specs(model)
+    module_name_filter = compile_module_name_filter(filter_rules)
+    planned = []
+    for name, module in model.named_modules():
+        if not is_within_max_layers(name, max_layers) or not matches_module_name_filter(
+            name, module_name_filter
+        ):
+            continue
+        spec = _matching_experts_defuse_spec(module, experts_defuse_specs)
+        if spec is None and not _experts_supports_decorator(module):
+            continue
+        if spec is not None and spec["forward_impl"] not in (
+            LINEAR_LOOP_IMPL,
+            BATCHED_INPUT_IMPL,
+            MUSE_SPARK_IMPL,
+        ):
+            raise ValueError(
+                f"Unsupported experts forward implementation: {spec['forward_impl']}"
+            )
+        try:
+            layout = validate_expert_layout(
+                module, spec.get("projection_names") if spec else None
+            )
+            if layout is None:
+                continue
+            gate = getattr(module, "_apply_gate", None)
+            default_gate = (
+                getattr(gate, "__module__", None) == "transformers.integrations.moe"
+                and getattr(gate, "__name__", None) == "_default_apply_gate"
+            )
+            gated = any(
+                _get_registered_tensor(module, name) is not None
+                for name in ("gate_up_proj", "gate_proj")
+            )
+            needs_activation = (
+                default_gate
+                or not callable(gate)
+                or not gated
+                or (spec and spec["forward_impl"] == MUSE_SPARK_IMPL)
+            )
+            if needs_activation and not callable(getattr(module, "act_fn", None)):
+                raise ValueError("Experts require act_fn or _apply_gate")
+            if spec is None:
+                if getattr(module, "has_post_expert_norm", False):
+                    raise ValueError(
+                        "Post-expert normalization requires a declarative forward"
+                    )
+                for config in (
+                    getattr(model, "config", None),
+                    getattr(module, "config", None),
+                ):
+                    selected = (
+                        getattr(config, "experts_implementation", None)
+                        or implementation
+                    )
+                    if selected != LINEAR_LOOP_IMPL:
+                        raise ValueError(
+                            f"Backend {selected!r} cannot run defused experts; use {LINEAR_LOOP_IMPL!r}"
+                        )
+            planned.append((name, module, spec))
+        except (ValueError, TypeError) as error:
+            raise ValueError(f"{name or '<root>'}: {error}") from error
+
+    return planned
+
+
 def prepare_model_for_moe_quantization(
     model: nn.Module,
     implementation: str = LINEAR_LOOP_IMPL,
     filter_rules=None,
+    max_layers: int | None = None,
 ) -> list[str]:
     """Prepare a model for MOE quantization using transformers' experts interface.
 
     This function:
     1. Registers the linear_loop experts implementation with transformers
-    2. Sets model.config._experts_implementation = implementation
+    2. Installs a compatible forward on each converted experts instance
     3. Unfuses all fused MOE expert weights into per-expert containers of nn.Linear
 
     After calling this function, the model's forward pass will use individual
@@ -791,6 +954,9 @@ def prepare_model_for_moe_quantization(
     Returns:
         List of module names that were unfused
     """
+    planned = plan_moe_quantization(model, implementation, filter_rules, max_layers)
+    if not planned:
+        return []
     if not register_linear_loop_experts():
         raise RuntimeError(
             "Failed to register linear_loop experts implementation. "
@@ -800,13 +966,7 @@ def prepare_model_for_moe_quantization(
     # Unfuse all fused experts modules, including models that need a generic
     # instance-level forward override instead of transformers' decorator path.
     unfused_modules = []
-    decorated_unfused_modules = []
-    experts_defuse_specs = _model_experts_defuse_specs(model)
-    module_name_filter = compile_module_name_filter(filter_rules)
-    for name, module in model.named_modules():
-        if not matches_module_name_filter(name, module_name_filter):
-            continue
-        spec = _matching_experts_defuse_spec(module, experts_defuse_specs)
+    for name, module, spec in planned:
         if spec is not None and _unfuse_experts_weights_inplace(
             module,
             check_decorator=False,
@@ -818,23 +978,12 @@ def prepare_model_for_moe_quantization(
             continue
 
         if _unfuse_experts_weights_inplace(module):
+            _install_instance_forward(module, LINEAR_LOOP_IMPL)
             unfused_modules.append(name)
-            decorated_unfused_modules.append(name)
             if DEBUG_ON: logger.debug(f"[MoE Prep] Unfused '{name}'")
 
-    # Only set config if we actually unfused something
-    # Models that don't support the decorator (like Llama4) won't have anything unfused
-    # and should use full module replacement instead
     if unfused_modules:
         if DEBUG_ON: logger.info(f"[MoE Prep] Unfused {len(unfused_modules)} MOE experts modules")
         clear_memory()
-
-        # Set config for linear_loop forward only when the upstream model uses
-        # the decorator-based experts interface.
-        if decorated_unfused_modules and hasattr(model, "config"):
-            saved_impl = getattr(model.config, "experts_implementation", None)
-            impl_to_set = saved_impl if saved_impl else implementation
-            model.config._experts_implementation = impl_to_set
-            if DEBUG_ON: logger.debug(f"Set model.config._experts_implementation = '{impl_to_set}'")
 
     return unfused_modules
