@@ -195,7 +195,7 @@ def _log_first_moe_block(model: torch.nn.Module, label: str) -> None:
             return
 
 
-def _handle_moe_modules(model: torch.nn.Module, filter_rules=None) -> list[str]:
+def _handle_moe_modules(model: torch.nn.Module, filter_rules=None, max_layers: int | None = None) -> list[str]:
     """Handle fused MOE modules using transformers' linear_loop backend.
 
     Args:
@@ -218,7 +218,7 @@ def _handle_moe_modules(model: torch.nn.Module, filter_rules=None) -> list[str]:
         return []
 
     # Use transformers' experts interface
-    unfused = prepare_model_for_moe_quantization(model, filter_rules=filter_rules)
+    unfused = prepare_model_for_moe_quantization(model, filter_rules=filter_rules, max_layers=max_layers)
     if unfused:
         logger.info(f"Prepared {len(unfused)} MOE modules for quantization")
     return unfused
@@ -255,7 +255,7 @@ def apply_replacements(
     # Run the generic MoE tensor defusion pass first so models with supported
     # fused experts can stay on their upstream module structure.
     if auto_detect_moe and is_transformers_version_greater_or_equal_5():
-        _handle_moe_modules(model, filter_rules=filter_rules)
+        _handle_moe_modules(model, filter_rules=filter_rules, max_layers=max_layers)
 
     # Fall back to replacement modules for any models that still need a custom
     # structural wrapper after the generic experts pass.

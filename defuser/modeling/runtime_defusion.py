@@ -243,8 +243,10 @@ def _dbrx_experts_forward(
     top_k_index: torch.Tensor,
     top_k_weights: torch.Tensor,
 ) -> torch.Tensor:
-    batch_size = hidden_states.shape[0]
-    hidden_states = hidden_states.reshape(-1, self.ffn_hidden_size)
+    if hidden_states.ndim < 2 or hidden_states.shape[-1] != self.hidden_size:
+        raise ValueError(f"DBRX hidden states require a final dimension of {self.hidden_size}")
+    original_shape = hidden_states.shape
+    hidden_states = hidden_states.reshape(-1, self.hidden_size)
     next_states = torch.zeros_like(hidden_states, dtype=hidden_states.dtype, device=hidden_states.device)
 
     with torch.no_grad():
@@ -257,10 +259,10 @@ def _dbrx_experts_forward(
         current_state = hidden_states[token_idx]
         current_hidden_states = self.act_fn(expert.gate_proj(current_state)) * expert.up_proj(current_state)
         current_hidden_states = expert.down_proj(current_hidden_states)
-        current_hidden_states = current_hidden_states.view(-1, self.ffn_hidden_size) * top_k_weights[token_idx, idx, None]
+        current_hidden_states = current_hidden_states * top_k_weights[token_idx, idx, None]
         next_states.index_add_(0, token_idx, current_hidden_states)
 
-    return next_states.view(batch_size, -1, self.ffn_hidden_size)
+    return next_states.view(original_shape)
 
 
 def patch_dbrx_experts(module: nn.Module) -> bool:
@@ -272,6 +274,10 @@ def patch_dbrx_experts(module: nn.Module) -> bool:
         return False
 
     split_shape = (module.num_experts, module.ffn_hidden_size, module.hidden_size)
+    expected_shape = (module.num_experts * module.ffn_hidden_size, module.hidden_size)
+    for name in ("w1", "v1", "w2"):
+        if tuple(getattr(mlp, name).shape) != expected_shape:
+            raise ValueError(f"DBRX {name} requires shape {expected_shape}")
     w1 = mlp.w1.view(split_shape)
     v1 = mlp.v1.view(split_shape)
     w2 = mlp.w2.view(split_shape)
@@ -281,25 +287,25 @@ def patch_dbrx_experts(module: nn.Module) -> bool:
         container.add_module(
             "gate_proj",
             _make_linear(
-                in_features=module.ffn_hidden_size,
-                out_features=module.hidden_size,
-                weight=w1[expert_idx].t().contiguous(),
+                in_features=module.hidden_size,
+                out_features=module.ffn_hidden_size,
+                weight=w1[expert_idx].contiguous(),
             ),
         )
         container.add_module(
             "up_proj",
             _make_linear(
-                in_features=module.ffn_hidden_size,
-                out_features=module.hidden_size,
-                weight=v1[expert_idx].t().contiguous(),
+                in_features=module.hidden_size,
+                out_features=module.ffn_hidden_size,
+                weight=v1[expert_idx].contiguous(),
             ),
         )
         container.add_module(
             "down_proj",
             _make_linear(
-                in_features=module.hidden_size,
-                out_features=module.ffn_hidden_size,
-                weight=w2[expert_idx].contiguous(),
+                in_features=module.ffn_hidden_size,
+                out_features=module.hidden_size,
+                weight=w2[expert_idx].t().contiguous(),
             ),
         )
         module.add_module(str(expert_idx), container)

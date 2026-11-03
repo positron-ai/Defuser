@@ -3,16 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # Contact: qubitium@modelcloud.ai, x.com/qubitium
 
-from defuser.utils.common import env_flag, warn_if_public_api_transformers_unsupported
-from logbar import LogBar
+import logging
+import os
 
-DEBUG_ON = env_flag("DEBUG")
+from .compatibility import (
+    CompatibilityError,
+    CompatibilityReport,
+    ConversionReport,
+    check_compatibility,
+    convert_model_with_report,
+)
 
-logger = LogBar(__name__)
+DEBUG_ON = os.getenv("DEBUG", "0").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+logger = logging.getLogger(__name__)
 
 
 def convert_model(*args, **kwargs) -> bool:
     """Lazily import conversion entrypoint to avoid import-time cycles."""
+    from defuser.utils.common import warn_if_public_api_transformers_unsupported
+
     if warn_if_public_api_transformers_unsupported("convert_model()", logger):
         return False
 
@@ -23,6 +33,8 @@ def convert_model(*args, **kwargs) -> bool:
 
 def replace_fused_blocks(*args, **kwargs) -> bool:
     """Lazily import conversion entrypoint to avoid import-time cycles."""
+    from defuser.utils.common import warn_if_public_api_transformers_unsupported
+
     if warn_if_public_api_transformers_unsupported("replace_fused_blocks()", logger):
         return False
 
@@ -31,5 +43,8 @@ def replace_fused_blocks(*args, **kwargs) -> bool:
     return _replace_fused_blocks(*args, **kwargs)
 
 
-
-__all__ = ["convert_model", "replace_fused_blocks"]
+__all__ = [
+    "convert_model", "replace_fused_blocks", "check_compatibility",
+    "convert_model_with_report", "CompatibilityError", "CompatibilityReport",
+    "ConversionReport",
+]
