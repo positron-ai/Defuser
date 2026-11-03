@@ -414,9 +414,6 @@ def validate_expert_layout(
             raise ValueError(
                 "Declared expert projections do not match registered tensors"
             )
-        detected = {
-            name: value for name, value in detected.items() if name in projection_names
-        }
     if not detected:
         return None
     tensors = {name: _get_registered_tensor(module, name) for name in detected}
@@ -499,8 +496,6 @@ def _experts_supports_decorator(module: nn.Module) -> bool:
     our linear_loop forward. Others need full module replacement.
     """
     forward_method = getattr(module.__class__, "forward", None)
-    if forward_method is None:
-        return False
     if not hasattr(forward_method, "__wrapped__") or not inspect.isfunction(
         forward_method
     ):

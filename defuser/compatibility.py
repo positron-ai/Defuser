@@ -86,43 +86,57 @@ def check_compatibility(
         return CompatibilityReport(model_type, versions, issues=tuple(issues))
 
     try:
-        from defuser.utils.common import is_version_at_least
+        from defuser.utils.common import (
+            MIN_SUPPORTED_TRANSFORMERS_VERSION,
+            is_version_at_least,
+        )
 
-        if not is_version_at_least(versions["transformers"], "5.3.0"):
-            issues.append(
-                CompatibilityIssue(
-                    "transformers_version", "Requires transformers>=5.3.0"
-                )
+        minimum = MIN_SUPPORTED_TRANSFORMERS_VERSION
+        if not is_version_at_least(versions["transformers"], minimum):
+            return CompatibilityReport(
+                model_type,
+                versions,
+                issues=(
+                    CompatibilityIssue(
+                        "transformers_version", f"Requires transformers>={minimum}"
+                    ),
+                ),
             )
-        else:
-            from defuser.model_registry import MODEL_CONFIG
-            from defuser.modeling.moe_experts_interface import plan_moe_quantization
 
-            config = MODEL_CONFIG.get(model_type)
-            if config is None:
-                issues.append(
+        from defuser.model_registry import MODEL_CONFIG
+        from defuser.modeling.moe_experts_interface import plan_moe_quantization
+
+        config = MODEL_CONFIG.get(model_type)
+        if config is None:
+            return CompatibilityReport(
+                model_type,
+                versions,
+                issues=(
                     CompatibilityIssue(
                         "model_type", f"Unregistered model type: {model_type!r}"
-                    )
-                )
-            else:
-                minimum = config.get("min_transformers_version", "5.3.0")
-                if not is_version_at_least(versions["transformers"], minimum):
-                    issues.append(
-                        CompatibilityIssue(
-                            "model_version",
-                            f"{model_type} requires transformers>={minimum}",
-                        )
-                    )
-                else:
-                    if max_layers is not None and max_layers < 1:
-                        raise ValueError("max_layers must be >= 1 when provided")
-                    targets = plan_moe_quantization(
-                        model, filter_rules=filter, max_layers=max_layers
-                    )
-                    return CompatibilityReport(
-                        model_type, versions, tuple(name for name, _, _ in targets)
-                    )
+                    ),
+                ),
+            )
+        minimum = config.get("min_transformers_version", minimum)
+        if not is_version_at_least(versions["transformers"], minimum):
+            return CompatibilityReport(
+                model_type,
+                versions,
+                issues=(
+                    CompatibilityIssue(
+                        "model_version",
+                        f"{model_type} requires transformers>={minimum}",
+                    ),
+                ),
+            )
+        if max_layers is not None and max_layers < 1:
+            raise ValueError("max_layers must be >= 1 when provided")
+        targets = plan_moe_quantization(
+            model, filter_rules=filter, max_layers=max_layers
+        )
+        return CompatibilityReport(
+            model_type, versions, tuple(name for name, _, _ in targets)
+        )
     except (
         ImportError,
         OSError,

@@ -1,6 +1,6 @@
-# Compatibility candidate
+# Compatibility checks
 
-This local `0.0.28+positron.3.dev0` candidate builds on `204a1f04`.
+The `0.0.28+positron.3.dev0` candidate builds on `204a1f04`.
 It is an experimental artifact, not a published release or a replacement for
 workload qualification.
 
@@ -65,5 +65,4 @@ responsibility of environment locks.
 
 Build a wheel with `python -m build --wheel`. The proposed CPU workflow exercises
 the same contracts across four Transformers versions and Python 3.10/3.12.
-The local validation record belongs in the private project notebook; CI has not
-been run by creating this workflow.
+Workflow results and local test results have separate validation scopes.
