@@ -17,6 +17,8 @@ The diagnostic API checks installed dependencies, the model registry, version
 floors, and selected generic experts' projection geometry, routing interface,
 activation and explicit backend settings. It does not mutate model tensors or
 register a backend. Importing dependencies can initialize their own global state.
+Version eligibility uses the loaded Transformers runtime; reports retain its
+version as `transformers_runtime` alongside the distribution metadata.
 `generic_targets` covers the generic pass; it is not an exhaustive list of custom
 runtime patches. Custom patchers validate their inputs when executed.
 
@@ -64,5 +66,6 @@ enforces its own Torch dependency floor. Exact Torch/CUDA builds remain the
 responsibility of environment locks.
 
 Build a wheel with `python -m build --wheel`. The proposed CPU workflow exercises
-the same contracts across four Transformers versions and Python 3.10/3.12.
+the same contracts across four Transformers versions on Python 3.14, serially
+and with eight pytest workers.
 Workflow results and local test results have separate validation scopes.

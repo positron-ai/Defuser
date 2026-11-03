@@ -42,6 +42,7 @@ from defuser import DEBUG_ON
 logger = LogBar(__name__)
 
 try:
+    from transformers.integrations import moe as transformers_moe
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
 
     HAS_EXPERTS_INTERFACE = True
@@ -887,8 +888,8 @@ def plan_moe_quantization(
                 continue
             gate = getattr(module, "_apply_gate", None)
             default_gate = (
-                getattr(gate, "__module__", None) == "transformers.integrations.moe"
-                and getattr(gate, "__name__", None) == "_default_apply_gate"
+                getattr(gate, "__func__", gate)
+                is getattr(transformers_moe, "_default_apply_gate", None)
             )
             gated = any(
                 _get_registered_tensor(module, name) is not None

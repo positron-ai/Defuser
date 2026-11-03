@@ -51,6 +51,35 @@ class CompatibilityError(ValueError):
         super().__init__("; ".join(issue.message for issue in reasons) or report.status)
 
 
+def _model_compatibility_issue(
+    model_type: str | None, runtime_version: str
+) -> CompatibilityIssue | None:
+    from defuser.utils.common import (
+        MIN_SUPPORTED_TRANSFORMERS_VERSION,
+        is_version_at_least,
+    )
+
+    minimum = MIN_SUPPORTED_TRANSFORMERS_VERSION
+    if not is_version_at_least(runtime_version, minimum):
+        return CompatibilityIssue(
+            "transformers_version", f"Requires transformers>={minimum}"
+        )
+
+    from defuser.model_registry import MODEL_CONFIG
+
+    config = MODEL_CONFIG.get(model_type)
+    if config is None:
+        return CompatibilityIssue(
+            "model_type", f"Unregistered model type: {model_type!r}"
+        )
+    minimum = config.get("min_transformers_version", minimum)
+    if not is_version_at_least(runtime_version, minimum):
+        return CompatibilityIssue(
+            "model_version", f"{model_type} requires transformers>={minimum}"
+        )
+    return None
+
+
 def check_compatibility(
     model: Any,
     *,
@@ -86,49 +115,14 @@ def check_compatibility(
         return CompatibilityReport(model_type, versions, issues=tuple(issues))
 
     try:
-        from defuser.utils.common import (
-            MIN_SUPPORTED_TRANSFORMERS_VERSION,
-            is_version_at_least,
-        )
+        import transformers
 
-        minimum = MIN_SUPPORTED_TRANSFORMERS_VERSION
-        if not is_version_at_least(versions["transformers"], minimum):
-            return CompatibilityReport(
-                model_type,
-                versions,
-                issues=(
-                    CompatibilityIssue(
-                        "transformers_version", f"Requires transformers>={minimum}"
-                    ),
-                ),
-            )
-
-        from defuser.model_registry import MODEL_CONFIG
+        versions["transformers_runtime"] = transformers.__version__
+        issue = _model_compatibility_issue(model_type, transformers.__version__)
+        if issue is not None:
+            return CompatibilityReport(model_type, versions, issues=(issue,))
         from defuser.modeling.moe_experts_interface import plan_moe_quantization
 
-        config = MODEL_CONFIG.get(model_type)
-        if config is None:
-            return CompatibilityReport(
-                model_type,
-                versions,
-                issues=(
-                    CompatibilityIssue(
-                        "model_type", f"Unregistered model type: {model_type!r}"
-                    ),
-                ),
-            )
-        minimum = config.get("min_transformers_version", minimum)
-        if not is_version_at_least(versions["transformers"], minimum):
-            return CompatibilityReport(
-                model_type,
-                versions,
-                issues=(
-                    CompatibilityIssue(
-                        "model_version",
-                        f"{model_type} requires transformers>={minimum}",
-                    ),
-                ),
-            )
         if max_layers is not None and max_layers < 1:
             raise ValueError("max_layers must be >= 1 when provided")
         targets = plan_moe_quantization(

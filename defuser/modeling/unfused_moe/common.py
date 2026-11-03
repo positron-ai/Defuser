@@ -22,7 +22,7 @@ def resolve_topk_routing(
             isinstance(weights, torch.Tensor)
             and isinstance(indices, torch.Tensor)
             and weights.shape == indices.shape
-            and indices.dtype in (torch.int32, torch.int64)
+            and indices.dtype == torch.int64
         ):
             return indices, weights
     raise TypeError(

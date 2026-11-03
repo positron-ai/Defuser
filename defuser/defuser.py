@@ -13,7 +13,6 @@ from defuser.modeling.update_module import update_module
 from defuser.utils.common import (
     MIN_SUPPORTED_TRANSFORMERS_VERSION,
     is_version_at_least,
-    is_supported_transformers_version,
     warn_if_public_api_transformers_unsupported,
 )
 import transformers
@@ -109,23 +108,17 @@ def replace_fused_blocks(model_type: str) -> bool:
 
 def check_model_compatibility(model: nn.Module) -> bool:
     """Validate model type and transformers version compatibility."""
+    from defuser.compatibility import _model_compatibility_issue
+
     config = getattr(model, "config", None)
     model_type = getattr(config, "model_type", None)
-    if model_type not in MODEL_CONFIG:
-        return False
-
-    if not is_supported_transformers_version():
-        return False
-
-    min_ver = MODEL_CONFIG[model_type].get("min_transformers_version")
-    if min_ver and not is_version_at_least(transformers.__version__, min_ver):
+    issue = _model_compatibility_issue(model_type, transformers.__version__)
+    if issue is not None and issue.code == "model_version":
         logger.warn(
             f"Skip conversion for model_type={model_type}: "
-            f"requires transformers>={min_ver}, current version is {transformers.__version__}."
+            f"{issue.message}, current version is {transformers.__version__}."
         )
-        return False
-
-    return True
+    return issue is None
 
 
 def convert_model(

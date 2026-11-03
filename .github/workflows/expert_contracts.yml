@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.12']
+        python: ['3.14']
         transformers: ['5.12.1', '5.15.1', '5.16.1', '5.20.1']
     env:
       CUDA_VISIBLE_DEVICES: ''
@@ -35,7 +35,7 @@ jobs:
       - name: Install CPU dependencies and wheel
         run: |
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install build pytest "transformers==${{ matrix.transformers }}"
+          python -m pip install build pytest pytest-xdist "transformers==${{ matrix.transformers }}"
           python -m build --wheel
           python -m pip install dist/*.whl
       - name: Test expert contracts
@@ -44,3 +44,4 @@ jobs:
           cp tests/test_compatibility.py tests/test_moe_experts_interface.py tests/test_muse_spark_experts.py "$RUNNER_TEMP/defuser-contracts/"
           cd "$RUNNER_TEMP/defuser-contracts"
           python -m pytest -q -c /dev/null test_compatibility.py test_moe_experts_interface.py test_muse_spark_experts.py
+          python -m pytest -q -c /dev/null -p xdist.plugin -n 8 test_compatibility.py test_moe_experts_interface.py test_muse_spark_experts.py
